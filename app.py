@@ -368,4 +368,309 @@ def calc_pct(curr_val, prev_val):
         return None
     return ((curr_val - prev_val) / prev_val) * 100
 
-def to_excel(
+def to_excel(df_summary, df_status, df_sku, df_cancel, df_wow):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_summary.to_excel(writer, index=False, sheet_name='Tong_Quan_Tuan')
+        df_status.to_excel(writer, index=False, sheet_name='Phan_Bo_5_Trang_Thai')
+        if not df_wow.empty:
+            df_wow.to_excel(writer, index=False, sheet_name='So_Sanh_2_Tuan')
+        df_sku.to_excel(writer, index=False, sheet_name='Hieu_Suat_San_Pham')
+        if not df_cancel.empty:
+            df_cancel.to_excel(writer, index=False, sheet_name='Phan_Tich_Hoan_Huy')
+    return output.getvalue()
+
+# --- GIAO DIỆN CHÍNH ---
+st.title("📊 HỆ THỐNG BÁO CÁO HIỆU SUẤT BÁN HÀNG TUẦN")
+st.caption("Tổng doanh thu | Chi phí Ads | ROI | Chi phí trên 1 đơn hàng | So sánh WoW")
+
+with st.sidebar:
+    st.header("📅 Dữ liệu TUẦN NÀY (Bắt buộc)")
+    sp_curr = st.file_uploader("File Shopee Tuần này (.xlsx, .csv)", type=['xlsx', 'xls', 'csv'], key="sp_curr")
+    tt_curr = st.file_uploader("File TikTok Tuần này (.xlsx, .csv)", type=['xlsx', 'xls', 'csv'], key="tt_curr")
+    ads_curr = st.number_input("Chi phí Ads Tuần này (VNĐ)", min_value=0, value=0, step=100000)
+
+    st.divider()
+    st.header("⏮️ Dữ liệu TUẦN TRƯỚC (Tùy chọn)")
+    st.caption("Tải thêm file tuần trước để tự động đối chiếu bên dưới từng chỉ số:")
+    sp_prev = st.file_uploader("File Shopee Tuần trước (.xlsx, .csv)", type=['xlsx', 'xls', 'csv'], key="sp_prev")
+    tt_prev = st.file_uploader("File TikTok Tuần trước (.xlsx, .csv)", type=['xlsx', 'xls', 'csv'], key="tt_prev")
+    ads_prev = st.number_input("Chi phí Ads Tuần trước (VNĐ)", min_value=0, value=0, step=100000)
+
+df_curr_raw, metas_curr = load_week_data(sp_curr, tt_curr)
+df_prev_raw, metas_prev = load_week_data(sp_prev, tt_prev)
+
+with st.sidebar:
+    if metas_curr or metas_prev:
+        st.divider()
+        with st.expander("🛠️ Kiểm tra nhận diện cột tự động"):
+            for m in (metas_curr + metas_prev):
+                st.caption(f"**{m['file_name']}** ({m['platform']}): {m['orders']:,} đơn | Cột tiền: `{m['col_rev']}`")
+
+if not df_curr_raw.empty:
+    m_curr = calc_metrics(df_curr_raw, ads_curr)
+    m_prev = calc_metrics(df_prev_raw, ads_prev) if not df_prev_raw.empty else None
+
+    # --- PHẦN 1: 4 THẺ KPI TỔNG QUAN THEO ĐÚNG YÊU CẦU ---
+    st.subheader("1. Tổng quan chỉ số tuần này")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        render_kpi_card(
+            label=f"Tổng doanh thu ({m_curr['tot_orders']:,} đơn)",
+            curr_str=f"{m_curr['gmv']:,.0f} đ",
+            prev_str=f"{m_prev['gmv']:,.0f} đ ({m_prev['tot_orders']:,} đơn)" if m_prev else None,
+            pct_change=calc_pct(m_curr['gmv'], m_prev['gmv']) if m_prev else None,
+            fallback_sub=f"Tổng {m_curr['tot_orders']:,} đơn đặt"
+        )
+    with c2:
+        render_kpi_card(
+            label="Số tiền Ads",
+            curr_str=f"{ads_curr:,.0f} đ" if ads_curr > 0 else "0 đ",
+            prev_str=f"{ads_prev:,.0f} đ" if m_prev else None,
+            pct_change=calc_pct(ads_curr, ads_prev) if (m_prev and ads_prev > 0) else None,
+            inverse_color=True,
+            fallback_sub="Nhập số tiền Ads ở cột trái" if ads_curr == 0 else "Tổng ngân sách quảng cáo"
+        )
+    with c3:
+        render_kpi_card(
+            label="ROI (Doanh thu / Ads)",
+            curr_str=f"{m_curr['roi']:.2f}" if ads_curr > 0 else "Chưa nhập Ads",
+            prev_str=f"{m_prev['roi']:.2f}" if (m_prev and ads_prev > 0) else ("Chưa nhập Ads" if m_prev else None),
+            pct_change=calc_pct(m_curr['roi'], m_prev['roi']) if (m_prev and ads_curr > 0 and ads_prev > 0) else None,
+            fallback_sub="Tỷ suất doanh thu trên Ads"
+        )
+    with c4:
+        render_kpi_card(
+            label="Chi phí cho 1 đơn hàng",
+            curr_str=f"{m_curr['cpo']:,.0f} đ" if ads_curr > 0 else "0 đ",
+            prev_str=f"{m_prev['cpo']:,.0f} đ" if (m_prev and ads_prev > 0) else ("0 đ" if m_prev else None),
+            pct_change=calc_pct(m_curr['cpo'], m_prev['cpo']) if (m_prev and ads_curr > 0 and ads_prev > 0) else None,
+            inverse_color=True,
+            fallback_sub="Tổng tiền Ads / Tổng số đơn"
+        )
+
+    # --- PHẦN 2: BẢNG & BIỂU ĐỒ PHÂN BỔ 5 NHÓM TRẠNG THÁI ---
+    st.divider()
+    st.subheader("2. Bảng tổng hợp 5 nhóm trạng thái đơn hàng")
+    
+    status_order = ['Giao thành công', 'Đang vận chuyển', 'Đang chờ giao hàng', 'Đơn hủy', 'Trả hàng / Hoàn tiền']
+    status_df = (
+        m_curr['full_df'].groupby('status_group', as_index=False)
+        .agg(So_Don=('order_id', 'nunique'), So_Luong_SP=('qty', 'sum'), Doanh_Thu=('revenue', 'sum'))
+    )
+    base_status = pd.DataFrame({'status_group': status_order})
+    status_df = pd.merge(base_status, status_df, on='status_group', how='left').fillna(0)
+    status_df['Ty_Trong_Don (%)'] = (status_df['So_Don'] / m_curr['tot_orders'] * 100).round(1) if m_curr['tot_orders'] > 0 else 0
+    status_df['Ty_Trong_DT (%)'] = (status_df['Doanh_Thu'] / m_curr['gmv'] * 100).round(1) if m_curr['gmv'] > 0 else 0
+
+    col_st1, col_st2 = st.columns([5, 5])
+    with col_st1:
+        st.dataframe(
+            status_df.rename(columns={
+                'status_group': 'Trạng thái đơn',
+                'So_Don': 'Số đơn',
+                'So_Luong_SP': 'SL sản phẩm',
+                'Doanh_Thu': 'Tổng doanh thu nhóm',
+                'Ty_Trong_Don (%)': '% Đơn',
+                'Ty_Trong_DT (%)': '% Doanh thu'
+            }).style.format({
+                'Số đơn': '{:,.0f}',
+                'SL sản phẩm': '{:,.0f}',
+                'Tổng doanh thu nhóm': '{:,.0f} đ',
+                '% Đơn': '{:.1f}%',
+                '% Doanh thu': '{:.1f}%'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    with col_st2:
+        color_map_status = {
+            'Giao thành công': '#0F2C59',
+            'Đang vận chuyển': '#2563EB',
+            'Đang chờ giao hàng': '#D4AF37',
+            'Đơn hủy': '#94A3B8',
+            'Trả hàng / Hoàn tiền': '#DC2626'
+        }
+        fig_st = px.bar(
+            status_df, x='status_group', y='Doanh_Thu', text_auto='.3s',
+            color='status_group', color_discrete_map=color_map_status,
+            labels={'status_group': 'Trạng thái', 'Doanh_Thu': 'Doanh thu (VNĐ)'}
+        )
+        fig_st.update_traces(textposition='outside')
+        fig_st.update_layout(plot_bgcolor='white', showlegend=False, height=280, margin=dict(t=20, b=20))
+        st.plotly_chart(fig_st, use_container_width=True)
+
+    # --- CÁC TAB PHÂN TÍCH CHUYÊN SÂU ---
+    tab1, tab2, tab3 = st.tabs([
+        "📈 Hiệu suất Sản phẩm & Sàn",
+        "🔄 So sánh Tuần này vs Tuần trước",
+        "⚠️ Phân tích Đơn Hoàn / Hủy"
+    ])
+
+    with tab1:
+        col1, col2 = st.columns([6, 4])
+        with col1:
+            st.markdown("**Top 5 Sản phẩm chủ lực (Theo Tổng doanh thu)**")
+            top_prod = (
+                m_curr['full_df'].groupby('product_name', as_index=False)
+                .agg({'revenue': 'sum', 'qty': 'sum', 'order_id': 'nunique'})
+                .sort_values(by='revenue', ascending=False).head(5)
+            )
+            fig_bar = px.bar(
+                top_prod, x='product_name', y='revenue', text_auto='.3s',
+                color_discrete_sequence=['#0F2C59'],
+                labels={'product_name': 'Sản phẩm', 'revenue': 'Doanh thu (VNĐ)'}
+            )
+            fig_bar.update_traces(marker_line_color='#D4AF37', marker_line_width=1.5, textposition='outside')
+            fig_bar.update_layout(plot_bgcolor='white', xaxis_tickangle=-15, height=380)
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        with col2:
+            st.markdown("**Tỷ trọng doanh thu theo sàn**")
+            plat_df = m_curr['full_df'].groupby('platform', as_index=False)['revenue'].sum()
+            fig_pie = px.pie(
+                plat_df, values='revenue', names='platform', hole=0.45,
+                color='platform', color_discrete_map={'Shopee': '#D4AF37', 'TikTok Shop': '#0F2C59'}
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie.update_layout(height=380)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.markdown("**Bảng hiệu suất chi tiết theo từng Sản phẩm**")
+        sku_merged = (
+            m_curr['full_df'].groupby(['platform', 'product_name'], as_index=False)
+            .agg(
+                Tong_Doanh_Thu=('revenue', 'sum'),
+                Tong_Don=('order_id', 'nunique'),
+                SL_Ban=('qty', 'sum')
+            )
+            .sort_values(by='Tong_Doanh_Thu', ascending=False)
+        )
+
+        st.dataframe(
+            sku_merged.style.format({
+                'Tong_Doanh_Thu': '{:,.0f} đ',
+                'Tong_Don': '{:,.0f}',
+                'SL_Ban': '{:,.0f}'
+            }),
+            use_container_width=True
+        )
+
+    wow_table = pd.DataFrame()
+    with tab2:
+        if m_prev is not None:
+            st.markdown("**Bảng so sánh tăng trưởng 2 tuần liên tiếp (WoW)**")
+            metrics_list = [
+                ("Tổng doanh thu", m_prev['gmv'], m_curr['gmv']),
+                ("Tổng số đơn", m_prev['tot_orders'], m_curr['tot_orders']),
+                ("Số tiền Ads", ads_prev, ads_curr),
+                ("ROI (Doanh thu / Ads)", round(m_prev['roi'], 2), round(m_curr['roi'], 2)),
+                ("Chi phí cho 1 đơn hàng", round(m_prev['cpo'], 0), round(m_curr['cpo'], 0))
+            ]
+            wow_rows = []
+            for name, v_prev, v_curr in metrics_list:
+                diff = v_curr - v_prev
+                pct = ((diff / v_prev) * 100) if v_prev != 0 else 0
+                wow_rows.append({
+                    'Chỉ số': name,
+                    'Tuần trước': v_prev,
+                    'Tuần này': v_curr,
+                    'Chênh lệch': diff,
+                    'Tăng trưởng (%)': round(pct, 1)
+                })
+            wow_table = pd.DataFrame(wow_rows)
+            st.dataframe(
+                wow_table.style.format({
+                    'Tuần trước': '{:,.2f}',
+                    'Tuần này': '{:,.2f}',
+                    'Chênh lệch': '{:+,.2f}',
+                    'Tăng trưởng (%)': '{:+.1f}%'
+                }),
+                use_container_width=True
+            )
+
+            st.markdown("**So sánh Tổng doanh thu theo Sàn (Tuần trước vs Tuần này)**")
+            p_prev = m_prev['full_df'].groupby('platform', as_index=False)['revenue'].sum()
+            p_prev['Kỳ báo cáo'] = 'Tuần trước'
+            p_curr = m_curr['full_df'].groupby('platform', as_index=False)['revenue'].sum()
+            p_curr['Kỳ báo cáo'] = 'Tuần này'
+            p_comp = pd.concat([p_prev, p_curr], ignore_index=True)
+
+            fig_wow = px.bar(
+                p_comp, x='platform', y='revenue', color='Kỳ báo cáo', barmode='group',
+                text_auto='.3s',
+                color_discrete_map={'Tuần trước': '#94A3B8', 'Tuần này': '#0F2C59'},
+                labels={'platform': 'Sàn TMĐT', 'revenue': 'Tổng doanh thu (VNĐ)'}
+            )
+            fig_wow.update_layout(plot_bgcolor='white', height=380)
+            st.plotly_chart(fig_wow, use_container_width=True)
+        else:
+            st.info("👈 Tải thêm file dữ liệu **Tuần trước** ở thanh công cụ bên trái để hệ thống tự động lập bảng so sánh tăng trưởng 2 tuần.")
+
+    cancel_summary = pd.DataFrame()
+    with tab3:
+        inv_df = m_curr['invalid_df']
+        if not inv_df.empty:
+            c_left, c_right = st.columns([5, 5])
+            with c_left:
+                st.markdown("**Phân loại Trả hàng/Hoàn tiền vs Đơn hủy**")
+                type_df = inv_df.groupby('status_group', as_index=False).agg(
+                    So_Don=('order_id', 'nunique'),
+                    Gia_Tri=('revenue', 'sum')
+                )
+                fig_ctype = px.pie(
+                    type_df, values='Gia_Tri', names='status_group', hole=0.4,
+                    color_discrete_sequence=['#DC2626', '#94A3B8']
+                )
+                fig_ctype.update_traces(textposition='inside', textinfo='percent+label')
+                fig_ctype.update_layout(height=350)
+                st.plotly_chart(fig_ctype, use_container_width=True)
+
+            with c_right:
+                st.markdown("**Top Lý do Hủy / Trả hàng phổ biến**")
+                reason_df = (
+                    inv_df.groupby(['platform', 'reason'], as_index=False)
+                    .agg(So_Don=('order_id', 'nunique'), Gia_Tri=('revenue', 'sum'))
+                    .sort_values(by='So_Don', ascending=False).head(8)
+                )
+                fig_reason = px.bar(
+                    reason_df, x='So_Don', y='reason', color='platform', orientation='h',
+                    color_discrete_map={'Shopee': '#D4AF37', 'TikTok Shop': '#0F2C59'},
+                    labels={'So_Don': 'Số đơn', 'reason': 'Lý do'}
+                )
+                fig_reason.update_layout(plot_bgcolor='white', yaxis={'categoryorder': 'total ascending'}, height=350)
+                st.plotly_chart(fig_reason, use_container_width=True)
+
+            st.markdown("**Danh sách chi tiết Sản phẩm bị Hoàn / Hủy nhiều nhất**")
+            cancel_summary = (
+                inv_df.groupby(['platform', 'status_group', 'product_name', 'reason'], as_index=False)
+                .agg(So_Don_Loi=('order_id', 'nunique'), Gia_Tri_That_Thoat=('revenue', 'sum'))
+                .sort_values(by='Gia_Tri_That_Thoat', ascending=False)
+            )
+            st.dataframe(
+                cancel_summary.style.format({'Gia_Tri_That_Thoat': '{:,.0f} đ'}),
+                use_container_width=True
+            )
+        else:
+            st.success("🎉 Tuần này không ghi nhận đơn hàng nào bị hủy hoặc hoàn trả.")
+
+    # --- NÚT TẢI FILE EXCEL TỔNG HỢP ---
+    st.divider()
+    summary_export = pd.DataFrame([{
+        'Tong_Doanh_Thu': m_curr['gmv'],
+        'Tong_So_Don': m_curr['tot_orders'],
+        'So_Tien_Ads': ads_curr,
+        'ROI': round(m_curr['roi'], 2),
+        'Chi_Phi_1_Don_Hang': round(m_curr['cpo'], 0)
+    }])
+    excel_bytes = to_excel(summary_export, status_df, sku_merged, cancel_summary, wow_table)
+    st.download_button(
+        label="📥 Tải xuống Báo Cáo Tuần Đầy Đủ (.xlsx)",
+        data=excel_bytes,
+        file_name="Bao_Cao_Tuan_TMDT_Gon.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    st.info("👈 Vui lòng tải lên ít nhất 1 file tất cả đơn hàng **Tuần này** (Shopee hoặc TikTok Shop) ở thanh bên trái để bắt đầu phân tích.")
