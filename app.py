@@ -2,10 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, Reference
 from io import BytesIO
 import re
 
-# --- CẤU HÌNH GIAO DIỆN (TRẮNG - XANH NAVY - VÀNG GOLD) ---
+# --- CẤU HÌNH GIAO DIỆN WEB (TRẮNG - XANH NAVY - VÀNG GOLD) ---
 st.set_page_config(page_title="Dashboard Báo Cáo Tuần TMĐT", page_icon="📊", layout="wide")
 
 st.markdown("""
@@ -437,16 +440,331 @@ def render_4_kpi_row(curr_kpi, prev_kpi=None, card_style="kpi-card", prefix=""):
             card_style=card_style
         )
 
-def to_excel(df_summary, df_status, df_sku, df_cancel, df_wow):
+# --- HÀM XUẤT EXCEL DASHBOARD CHUYÊN NGHIỆP (TRẮNG - XANH NAVY - VÀNG GOLD) ---
+def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None, int_cols=None, growth_col=None):
+    currency_cols = currency_cols or []
+    pct_cols = pct_cols or []
+    int_cols = int_cols or []
+
+    ws.views.sheetView[0].showGridLines = True
+    navy_fill = PatternFill(start_color="0F2C59", end_color="0F2C59", fill_type="solid")
+    gold_fill = PatternFill(start_color="D4AF37", end_color="D4AF37", fill_type="solid")
+    zebra_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    green_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
+    red_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
+
+    thin_side = Side(border_style="thin", color="CBD5E1")
+    gold_bottom = Side(border_style="medium", color="D4AF37")
+    cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    ncols = max(len(df.columns), 4)
+    # Banner tiêu đề
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    c_title = ws.cell(1, 1, title)
+    c_title.font = Font(name="Segoe UI", size=14, bold=True, color="FFFFFF")
+    c_title.fill = navy_fill
+    c_title.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 32
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    c_sub = ws.cell(2, 1, subtitle)
+    c_sub.font = Font(name="Segoe UI", size=9.5, italic=True, color="0F2C59")
+    c_sub.fill = PatternFill(start_color="FEF9C3", end_color="FEF9C3", fill_type="solid")
+    c_sub.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 22
+
+    # Header bảng ở dòng 4
+    header_row = 4
+    ws.row_dimensions[header_row].height = 26
+    for col_idx, col_name in enumerate(df.columns, start=1):
+        cell = ws.cell(header_row, col_idx, col_name)
+        cell.font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
+        cell.fill = navy_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=gold_bottom)
+
+    # Dữ liệu từ dòng 5
+    for r_idx, row in enumerate(df.itertuples(index=False), start=header_row + 1):
+        ws.row_dimensions[r_idx].height = 22
+        row_fill = zebra_fill if r_idx % 2 == 1 else white_fill
+        for c_idx, val in enumerate(row, start=1):
+            col_name = df.columns[c_idx - 1]
+            cell = ws.cell(r_idx, c_idx, val)
+            cell.font = Font(name="Segoe UI", size=10, color="1E293B")
+            cell.fill = row_fill
+            cell.border = cell_border
+
+            if col_name in currency_cols:
+                cell.number_format = '#,##0 "đ"'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif col_name in pct_cols:
+                cell.number_format = '0.0"%"'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif col_name in int_cols:
+                cell.number_format = '#,##0'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+            if growth_col and col_name == growth_col and isinstance(val, (int, float)):
+                cell.number_format = '+0.0"%";-0.0"%";0.0"%"'
+                if val > 0:
+                    cell.fill = green_fill
+                    cell.font = Font(name="Segoe UI", size=10, bold=True, color="15803D")
+                elif val < 0:
+                    cell.fill = red_fill
+                    cell.font = Font(name="Segoe UI", size=10, bold=True, color="B91C1C")
+
+    # Auto-fit column width
+    for col_idx, col_name in enumerate(df.columns, start=1):
+        max_len = len(str(col_name))
+        for r_idx in range(header_row + 1, header_row + 1 + len(df)):
+            val = ws.cell(r_idx, col_idx).value
+            if val is not None:
+                max_len = max(max_len, min(len(str(val)), 48))
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(max_len + 5, 14)
+
+def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cancel_summary, wow_table):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "1_Tong_Quan_Dashboard"
+    ws.views.sheetView[0].showGridLines = True
+
+    navy_fill = PatternFill(start_color="0F2C59", end_color="0F2C59", fill_type="solid")
+    gold_fill = PatternFill(start_color="D4AF37", end_color="D4AF37", fill_type="solid")
+    sp_header_fill = PatternFill(start_color="B45309", end_color="B45309", fill_type="solid")
+    tt_header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    
+    card_bg_all = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    card_bg_sp = PatternFill(start_color="FFFBEB", end_color="FFFBEB", fill_type="solid")
+    card_bg_tt = PatternFill(start_color="EFF6FF", end_color="EFF6FF", fill_type="solid")
+    
+    thin_gray = Side(border_style="thin", color="CBD5E1")
+    thick_navy = Side(border_style="medium", color="0F2C59")
+    thick_gold = Side(border_style="medium", color="D4AF37")
+    thick_blue = Side(border_style="medium", color="1E3A8A")
+
+    # 1. Banner tiêu đề Dashboard
+    ws.merge_cells("A1:H1")
+    c1 = ws["A1"]
+    c1.value = "📊 BÁO CÁO HIỆU SUẤT KINH DOANH TUẦN — SHOPEE & TIKTOK SHOP"
+    c1.font = Font(name="Segoe UI", size=15, bold=True, color="FFFFFF")
+    c1.fill = navy_fill
+    c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 36
+
+    ws.merge_cells("A2:H2")
+    c2 = ws["A2"]
+    c2.value = "Tổng hợp doanh thu, ngân sách quảng cáo, tỷ suất ROI & chi phí trên mỗi đơn hàng"
+    c2.font = Font(name="Segoe UI", size=10, italic=True, color="0F2C59")
+    c2.fill = PatternFill(start_color="FEF9C3", end_color="FEF9C3", fill_type="solid")
+    c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 22
+
+    # 2. Hàm vẽ 1 hàng 4 thẻ KPI giống hệt trên Web
+    def write_kpi_block(start_row, section_title, header_fill, bg_fill, accent_side, kpi_curr, kpi_prev):
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=8)
+        sec = ws.cell(start_row, 1, section_title)
+        sec.font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        sec.fill = header_fill
+        sec.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[start_row].height = 25
+
+        r_lbl = start_row + 1
+        r_val = start_row + 2
+        r_sub = start_row + 3
+        ws.row_dimensions[r_lbl].height = 20
+        ws.row_dimensions[r_val].height = 28
+        ws.row_dimensions[r_sub].height = 19
+
+        has_p = kpi_prev is not None and kpi_prev['tot_orders'] > 0
+        cards = [
+            (
+                f"Tổng doanh thu ({kpi_curr['tot_orders']:,} đơn)",
+                kpi_curr['gmv'],
+                '#,##0 "đ"',
+                f"Tuần trước: {kpi_prev['gmv']:,.0f} đ ({kpi_prev['tot_orders']:,} đơn)" if has_p else f"Tổng {kpi_curr['tot_orders']:,} đơn"
+            ),
+            (
+                "Số tiền Ads",
+                kpi_curr['ad_spend'],
+                '#,##0 "đ"',
+                f"Tuần trước: {kpi_prev['ad_spend']:,.0f} đ" if kpi_prev is not None else "Ngân sách quảng cáo"
+            ),
+            (
+                "ROI (Doanh thu / Ads)",
+                kpi_curr['roi'] if kpi_curr['ad_spend'] > 0 else "Chưa nhập Ads",
+                '0.00' if kpi_curr['ad_spend'] > 0 else '@',
+                f"Tuần trước: {kpi_prev['roi']:.2f}" if (kpi_prev is not None and kpi_prev['ad_spend'] > 0) else "Tỷ suất Doanh thu / Ads"
+            ),
+            (
+                "Chi phí cho 1 đơn hàng",
+                kpi_curr['cpo'] if kpi_curr['ad_spend'] > 0 else 0,
+                '#,##0 "đ"',
+                f"Tuần trước: {kpi_prev['cpo']:,.0f} đ" if (kpi_prev is not None and kpi_prev['ad_spend'] > 0) else "Tiền Ads / Tổng số đơn"
+            )
+        ]
+
+        for idx, (lbl, val, num_fmt, sub_txt) in enumerate(cards):
+            c_start = idx * 2 + 1
+            c_end = c_start + 1
+            for rr in (r_lbl, r_val, r_sub):
+                ws.merge_cells(start_row=rr, start_column=c_start, end_row=rr, end_column=c_end)
+                for cc in (c_start, c_end):
+                    cell = ws.cell(rr, cc)
+                    cell.fill = bg_fill
+                    cell.border = Border(
+                        left=accent_side if cc == c_start else None,
+                        right=thin_gray if cc == c_end else None,
+                        top=thin_gray if rr == r_lbl else None,
+                        bottom=thin_gray if rr == r_sub else None
+                    )
+
+            c_l = ws.cell(r_lbl, c_start, lbl)
+            c_l.font = Font(name="Segoe UI", size=9.5, bold=True, color="475569")
+            c_l.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+            c_v = ws.cell(r_val, c_start, val)
+            c_v.font = Font(name="Segoe UI", size=14, bold=True, color="0F2C59")
+            c_v.number_format = num_fmt
+            c_v.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+            c_s = ws.cell(r_sub, c_start, sub_txt)
+            c_s.font = Font(name="Segoe UI", size=8.5, italic=True, color="64748B")
+            c_s.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+    curr_row = 4
+    write_kpi_block(curr_row, "🌐 TỔNG HỢP TOÀN SHOP (SHOPEE + TIKTOK SHOP)", navy_fill, card_bg_all, thick_navy, m_curr['all'], m_prev['all'] if m_prev else None)
+    curr_row += 5
+
+    if m_curr['Shopee']['tot_orders'] > 0 or m_curr['Shopee']['ad_spend'] > 0:
+        write_kpi_block(curr_row, "🟠 SÀN SHOPEE", sp_header_fill, card_bg_sp, thick_gold, m_curr['Shopee'], m_prev['Shopee'] if m_prev else None)
+        curr_row += 5
+
+    if m_curr['TikTok Shop']['tot_orders'] > 0 or m_curr['TikTok Shop']['ad_spend'] > 0:
+        write_kpi_block(curr_row, "⚫ SÀN TIKTOK SHOP", tt_header_fill, card_bg_tt, thick_blue, m_curr['TikTok Shop'], m_prev['TikTok Shop'] if m_prev else None)
+        curr_row += 5
+
+    # 3. Bảng 5 nhóm trạng thái đơn hàng + Biểu đồ cột ngay trên Sheet 1
+    st_start = curr_row
+    ws.merge_cells(start_row=st_start, start_column=1, end_row=st_start, end_column=6)
+    sec_st = ws.cell(st_start, 1, "📦 PHÂN BỔ 5 NHÓM TRẠNG THÁI ĐƠN HÀNG (TOÀN SHOP)")
+    sec_st.font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    sec_st.fill = navy_fill
+    sec_st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[st_start].height = 25
+
+    st_headers = ["Trạng thái đơn", "Số đơn", "SL sản phẩm", "Tổng doanh thu", "% Đơn", "% Doanh thu"]
+    r_hdr = st_start + 1
+    ws.row_dimensions[r_hdr].height = 24
+    for c_i, h_txt in enumerate(st_headers, start=1):
+        c = ws.cell(r_hdr, c_i, h_txt)
+        c.font = Font(name="Segoe UI", size=9.5, bold=True, color="0F2C59")
+        c.fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thick_gold)
+
+    for idx, r_data in enumerate(status_df.itertuples(index=False), start=r_hdr + 1):
+        ws.row_dimensions[idx].height = 21
+        vals = [r_data.status_group, r_data.So_Don, r_data.So_Luong_SP, r_data.Doanh_Thu, r_data._5, r_data._6]
+        for c_i, v in enumerate(vals, start=1):
+            c = ws.cell(idx, c_i, v)
+            c.font = Font(name="Segoe UI", size=9.5, bold=(c_i == 1), color="1E293B")
+            c.border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thin_gray)
+            if c_i in (2, 3):
+                c.number_format = '#,##0'
+                c.alignment = Alignment(horizontal="right", vertical="center")
+            elif c_i == 4:
+                c.number_format = '#,##0 "đ"'
+                c.alignment = Alignment(horizontal="right", vertical="center")
+            elif c_i in (5, 6):
+                c.number_format = '0.0"%"'
+                c.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                c.alignment = Alignment(horizontal="left", vertical="center")
+
+    # Vẽ biểu đồ cột doanh thu theo 5 trạng thái ngay bên cạnh bảng (cột G)
+    chart = BarChart()
+    chart.type = "col"
+    chart.style = 10
+    chart.title = "Doanh thu theo trạng thái đơn"
+    chart.y_axis.title = "VNĐ"
+    chart.legend = None
+    data_ref = Reference(ws, min_col=4, min_row=r_hdr, max_row=r_hdr + len(status_df))
+    cats_ref = Reference(ws, min_col=1, min_row=r_hdr + 1, max_row=r_hdr + len(status_df))
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    chart.width = 14
+    chart.height = 7.5
+    ws.add_chart(chart, f"G{st_start}")
+
+    # Đặt độ rộng cột chuẩn cho Sheet 1
+    col_widths_s1 = {1: 24, 2: 14, 3: 15, 4: 20, 5: 13, 6: 15, 7: 22, 8: 22}
+    for c_idx, w in col_widths_s1.items():
+        ws.column_dimensions[get_column_letter(c_idx)].width = w
+
+    # --- SHEET 2: CHI TIẾT 5 TRẠNG THÁI THEO SÀN ---
+    ws2 = wb.create_sheet("2_Trang_Thai_Theo_San")
+    style_table_sheet(
+        ws2, split_st,
+        title="PHÂN BỔ 5 TRẠNG THÁI ĐƠN HÀNG THEO TỪNG SÀN",
+        subtitle="Đối chiếu chi tiết số đơn và doanh thu giữa Shopee và TikTok Shop",
+        currency_cols=["Doanh thu Shopee", "Doanh thu TikTok Shop"],
+        int_cols=["Số đơn Shopee", "Số đơn TikTok Shop"]
+    )
+
+    # --- SHEET 3: SO SÁNH 2 TUẦN (WOW) ---
+    if not wow_table.empty:
+        ws3 = wb.create_sheet("3_So_Sanh_2_Tuan")
+        style_table_sheet(
+            ws3, wow_table,
+            title="SO SÁNH TĂNG TRƯỞNG 2 TUẦN LIÊN TIẾP (WoW)",
+            subtitle="Đối chiếu Toàn Shop, Shopee và TikTok Shop giữa Tuần trước và Tuần này",
+            growth_col="Tăng trưởng (%)"
+        )
+
+    # --- SHEET 4: HIỆU SUẤT SẢN PHẨM ---
+    ws4 = wb.create_sheet("4_Hieu_Suat_San_Pham")
+    sku_export = sku_merged.rename(columns={
+        'platform': 'Sàn TMĐT',
+        'product_name': 'Tên sản phẩm',
+        'Tong_Doanh_Thu': 'Tổng doanh thu',
+        'Tong_Don': 'Tổng số đơn',
+        'SL_Ban': 'SL sản phẩm'
+    })
+    style_table_sheet(
+        ws4, sku_export,
+        title="BÁO CÁO HIỆU SUẤT DOANH THU THEO SẢN PHẨM",
+        subtitle="Sắp xếp theo thứ tự doanh thu từ cao xuống thấp",
+        currency_cols=["Tổng doanh thu"],
+        int_cols=["Tổng số đơn", "SL sản phẩm"]
+    )
+
+    # --- SHEET 5: PHÂN TÍCH ĐƠN HOÀN / HỦY ---
+    if not cancel_summary.empty:
+        ws5 = wb.create_sheet("5_Phan_Tich_Hoan_Huy")
+        cancel_export = cancel_summary.rename(columns={
+            'platform': 'Sàn TMĐT',
+            'status_group': 'Nhóm trạng thái',
+            'product_name': 'Tên sản phẩm',
+            'reason': 'Lý do hủy / hoàn',
+            'So_Don_Loi': 'Số đơn lỗi',
+            'Gia_Tri_That_Thoat': 'Giá trị đơn lỗi'
+        })
+        style_table_sheet(
+            ws5, cancel_export,
+            title="PHÂN TÍCH CHI TIẾT ĐƠN HỦY & TRẢ HÀNG / HOÀN TIỀN",
+            subtitle="Thống kê nguyên nhân và sản phẩm có tỷ lệ hoàn/hủy cao",
+            currency_cols=["Giá trị đơn lỗi"],
+            int_cols=["Số đơn lỗi"]
+        )
+
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_summary.to_excel(writer, index=False, sheet_name='Tong_Quan_Theo_San')
-        df_status.to_excel(writer, index=False, sheet_name='Phan_Bo_5_Trang_Thai')
-        if not df_wow.empty:
-            df_wow.to_excel(writer, index=False, sheet_name='So_Sanh_2_Tuan')
-        df_sku.to_excel(writer, index=False, sheet_name='Hieu_Suat_San_Pham')
-        if not df_cancel.empty:
-            df_cancel.to_excel(writer, index=False, sheet_name='Phan_Tich_Hoan_Huy')
+    wb.save(output)
     return output.getvalue()
 
 # --- GIAO DIỆN CHÍNH ---
@@ -484,10 +802,9 @@ if not df_curr_raw.empty:
     m_curr = calc_metrics(df_curr_raw, ads_sp_curr, ads_tt_curr)
     m_prev = calc_metrics(df_prev_raw, ads_sp_prev, ads_tt_prev) if not df_prev_raw.empty else None
 
-    # --- PHẦN 1: TỔNG QUAN CHỈ SỐ TUẦN NÀY (TỔNG HỢP + TÁCH RIÊNG TỪNG SÀN) ---
+    # --- PHẦN 1: TỔNG QUAN CHỈ SỐ TUẦN NÀY ---
     st.subheader("1. Tổng quan chỉ số tuần này")
     
-    # 1.1 Tổng hợp 2 sàn
     st.markdown("**🌐 Tổng hợp Toàn Shop (Shopee + TikTok Shop)**")
     render_4_kpi_row(
         curr_kpi=m_curr['all'],
@@ -495,7 +812,6 @@ if not df_curr_raw.empty:
         card_style="kpi-card"
     )
 
-    # 1.2 Tách riêng Shopee (nếu có dữ liệu Shopee)
     if m_curr['Shopee']['tot_orders'] > 0 or ads_sp_curr > 0:
         st.markdown("**🟠 Sàn Shopee**")
         render_4_kpi_row(
@@ -504,7 +820,6 @@ if not df_curr_raw.empty:
             card_style="kpi-card-shopee"
         )
 
-    # 1.3 Tách riêng TikTok Shop (nếu có dữ liệu TikTok)
     if m_curr['TikTok Shop']['tot_orders'] > 0 or ads_tt_curr > 0:
         st.markdown("**⚫ Sàn TikTok Shop**")
         render_4_kpi_row(
@@ -513,13 +828,12 @@ if not df_curr_raw.empty:
             card_style="kpi-card-tiktok"
         )
 
-    # --- PHẦN 2: BẢNG & BIỂU ĐỒ PHÂN BỔ 5 NHÓM TRẠNG THÁI (CÓ TÁCH THEO SÀN) ---
+    # --- PHẦN 2: BẢNG & BIỂU ĐỒ PHÂN BỔ 5 NHÓM TRẠNG THÁI ---
     st.divider()
     st.subheader("2. Bảng tổng hợp 5 nhóm trạng thái đơn hàng")
     
     status_order = ['Giao thành công', 'Đang vận chuyển', 'Đang chờ giao hàng', 'Đơn hủy', 'Trả hàng / Hoàn tiền']
     
-    # Bảng tổng hợp chung
     status_df = (
         m_curr['full_df'].groupby('status_group', as_index=False)
         .agg(So_Don=('order_id', 'nunique'), So_Luong_SP=('qty', 'sum'), Doanh_Thu=('revenue', 'sum'))
@@ -570,18 +884,18 @@ if not df_curr_raw.empty:
         fig_st.update_layout(plot_bgcolor='white', height=280, margin=dict(t=20, b=20))
         st.plotly_chart(fig_st, use_container_width=True)
 
-    # Bảng chi tiết 5 trạng thái tách riêng Shopee vs TikTok
+    piv_orders = m_curr['full_df'].pivot_table(
+        index='status_group', columns='platform', values='order_id', aggfunc='nunique', fill_value=0
+    )
+    piv_rev = m_curr['full_df'].pivot_table(
+        index='status_group', columns='platform', values='revenue', aggfunc='sum', fill_value=0
+    )
+    split_st = pd.DataFrame({'Trạng thái đơn': status_order})
+    for p in ['Shopee', 'TikTok Shop']:
+        split_st[f'Số đơn {p}'] = split_st['Trạng thái đơn'].map(piv_orders[p]).fillna(0) if p in piv_orders else 0
+        split_st[f'Doanh thu {p}'] = split_st['Trạng thái đơn'].map(piv_rev[p]).fillna(0) if p in piv_rev else 0
+
     with st.expander("📋 Xem bảng chi tiết 5 trạng thái tách riêng Shopee và TikTok Shop"):
-        piv_orders = m_curr['full_df'].pivot_table(
-            index='status_group', columns='platform', values='order_id', aggfunc='nunique', fill_value=0
-        )
-        piv_rev = m_curr['full_df'].pivot_table(
-            index='status_group', columns='platform', values='revenue', aggfunc='sum', fill_value=0
-        )
-        split_st = pd.DataFrame({'Trạng thái đơn': status_order})
-        for p in ['Shopee', 'TikTok Shop']:
-            split_st[f'Số đơn {p}'] = split_st['Trạng thái đơn'].map(piv_orders[p]).fillna(0) if p in piv_orders else 0
-            split_st[f'Doanh thu {p}'] = split_st['Trạng thái đơn'].map(piv_rev[p]).fillna(0) if p in piv_rev else 0
         st.dataframe(
             split_st.style.format({
                 'Số đơn Shopee': '{:,.0f}',
@@ -759,39 +1073,13 @@ if not df_curr_raw.empty:
         else:
             st.success("🎉 Tuần này không ghi nhận đơn hàng nào bị hủy hoặc hoàn trả.")
 
-    # --- NÚT TẢI FILE EXCEL TỔNG HỢP (TÁCH RIÊNG THEO SÀN) ---
+    # --- NÚT TẢI FILE EXCEL DASHBOARD CHUYÊN NGHIỆP ---
     st.divider()
-    summary_export = pd.DataFrame([
-        {
-            'Kenh_Ban_Hang': 'Tổng Hợp (Shopee + TikTok)',
-            'Tong_Doanh_Thu': m_curr['all']['gmv'],
-            'Tong_So_Don': m_curr['all']['tot_orders'],
-            'So_Tien_Ads': m_curr['all']['ad_spend'],
-            'ROI': round(m_curr['all']['roi'], 2),
-            'Chi_Phi_1_Don_Hang': round(m_curr['all']['cpo'], 0)
-        },
-        {
-            'Kenh_Ban_Hang': 'Shopee',
-            'Tong_Doanh_Thu': m_curr['Shopee']['gmv'],
-            'Tong_So_Don': m_curr['Shopee']['tot_orders'],
-            'So_Tien_Ads': m_curr['Shopee']['ad_spend'],
-            'ROI': round(m_curr['Shopee']['roi'], 2),
-            'Chi_Phi_1_Don_Hang': round(m_curr['Shopee']['cpo'], 0)
-        },
-        {
-            'Kenh_Ban_Hang': 'TikTok Shop',
-            'Tong_Doanh_Thu': m_curr['TikTok Shop']['gmv'],
-            'Tong_So_Don': m_curr['TikTok Shop']['tot_orders'],
-            'So_Tien_Ads': m_curr['TikTok Shop']['ad_spend'],
-            'ROI': round(m_curr['TikTok Shop']['roi'], 2),
-            'Chi_Phi_1_Don_Hang': round(m_curr['TikTok Shop']['cpo'], 0)
-        }
-    ])
-    excel_bytes = to_excel(summary_export, status_df, sku_merged, cancel_summary, wow_table)
+    excel_bytes = build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cancel_summary, wow_table)
     st.download_button(
         label="📥 Tải xuống Báo Cáo Tuần Đầy Đủ (.xlsx)",
         data=excel_bytes,
-        file_name="Bao_Cao_Tuan_TMDT_Tach_San.xlsx",
+        file_name="Bao_Cao_Dashboard_Tuan_TMDT.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
