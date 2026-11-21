@@ -448,7 +448,6 @@ def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None
 
     ws.views.sheetView[0].showGridLines = True
     navy_fill = PatternFill(start_color="0F2C59", end_color="0F2C59", fill_type="solid")
-    gold_fill = PatternFill(start_color="D4AF37", end_color="D4AF37", fill_type="solid")
     zebra_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
     white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
     green_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
@@ -459,7 +458,6 @@ def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None
     cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
     ncols = max(len(df.columns), 4)
-    # Banner tiêu đề
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
     c_title = ws.cell(1, 1, title)
     c_title.font = Font(name="Segoe UI", size=14, bold=True, color="FFFFFF")
@@ -474,7 +472,6 @@ def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None
     c_sub.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 22
 
-    # Header bảng ở dòng 4
     header_row = 4
     ws.row_dimensions[header_row].height = 26
     for col_idx, col_name in enumerate(df.columns, start=1):
@@ -484,12 +481,12 @@ def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=gold_bottom)
 
-    # Dữ liệu từ dòng 5
-    for r_idx, row in enumerate(df.itertuples(index=False), start=header_row + 1):
+    for row_offset, (_, row) in enumerate(df.iterrows()):
+        r_idx = header_row + 1 + row_offset
         ws.row_dimensions[r_idx].height = 22
         row_fill = zebra_fill if r_idx % 2 == 1 else white_fill
-        for c_idx, val in enumerate(row, start=1):
-            col_name = df.columns[c_idx - 1]
+        for c_idx, col_name in enumerate(df.columns, start=1):
+            val = row[col_name]
             cell = ws.cell(r_idx, c_idx, val)
             cell.font = Font(name="Segoe UI", size=10, color="1E293B")
             cell.fill = row_fill
@@ -519,7 +516,6 @@ def style_table_sheet(ws, df, title, subtitle, currency_cols=None, pct_cols=None
                     cell.fill = red_fill
                     cell.font = Font(name="Segoe UI", size=10, bold=True, color="B91C1C")
 
-    # Auto-fit column width
     for col_idx, col_name in enumerate(df.columns, start=1):
         max_len = len(str(col_name))
         for r_idx in range(header_row + 1, header_row + 1 + len(df)):
@@ -535,7 +531,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
     ws.views.sheetView[0].showGridLines = True
 
     navy_fill = PatternFill(start_color="0F2C59", end_color="0F2C59", fill_type="solid")
-    gold_fill = PatternFill(start_color="D4AF37", end_color="D4AF37", fill_type="solid")
     sp_header_fill = PatternFill(start_color="B45309", end_color="B45309", fill_type="solid")
     tt_header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
     
@@ -548,7 +543,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
     thick_gold = Side(border_style="medium", color="D4AF37")
     thick_blue = Side(border_style="medium", color="1E3A8A")
 
-    # 1. Banner tiêu đề Dashboard
     ws.merge_cells("A1:H1")
     c1 = ws["A1"]
     c1.value = "📊 BÁO CÁO HIỆU SUẤT KINH DOANH TUẦN — SHOPEE & TIKTOK SHOP"
@@ -565,7 +559,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
     c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 22
 
-    # 2. Hàm vẽ 1 hàng 4 thẻ KPI giống hệt trên Web
     def write_kpi_block(start_row, section_title, header_fill, bg_fill, accent_side, kpi_curr, kpi_prev):
         ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=8)
         sec = ws.cell(start_row, 1, section_title)
@@ -597,13 +590,13 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
             ),
             (
                 "ROI (Doanh thu / Ads)",
-                kpi_curr['roi'] if kpi_curr['ad_spend'] > 0 else "Chưa nhập Ads",
+                round(kpi_curr['roi'], 2) if kpi_curr['ad_spend'] > 0 else "Chưa nhập Ads",
                 '0.00' if kpi_curr['ad_spend'] > 0 else '@',
                 f"Tuần trước: {kpi_prev['roi']:.2f}" if (kpi_prev is not None and kpi_prev['ad_spend'] > 0) else "Tỷ suất Doanh thu / Ads"
             ),
             (
                 "Chi phí cho 1 đơn hàng",
-                kpi_curr['cpo'] if kpi_curr['ad_spend'] > 0 else 0,
+                round(kpi_curr['cpo'], 0) if kpi_curr['ad_spend'] > 0 else 0,
                 '#,##0 "đ"',
                 f"Tuần trước: {kpi_prev['cpo']:,.0f} đ" if (kpi_prev is not None and kpi_prev['ad_spend'] > 0) else "Tiền Ads / Tổng số đơn"
             )
@@ -649,7 +642,7 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
         write_kpi_block(curr_row, "⚫ SÀN TIKTOK SHOP", tt_header_fill, card_bg_tt, thick_blue, m_curr['TikTok Shop'], m_prev['TikTok Shop'] if m_prev else None)
         curr_row += 5
 
-    # 3. Bảng 5 nhóm trạng thái đơn hàng + Biểu đồ cột ngay trên Sheet 1
+    # Bảng 5 nhóm trạng thái đơn hàng + Biểu đồ cột ngay trên Sheet 1
     st_start = curr_row
     ws.merge_cells(start_row=st_start, start_column=1, end_row=st_start, end_column=6)
     sec_st = ws.cell(st_start, 1, "📦 PHÂN BỔ 5 NHÓM TRẠNG THÁI ĐƠN HÀNG (TOÀN SHOP)")
@@ -668,9 +661,17 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thick_gold)
 
-    for idx, r_data in enumerate(status_df.itertuples(index=False), start=r_hdr + 1):
+    for row_offset, (_, r_data) in enumerate(status_df.iterrows()):
+        idx = r_hdr + 1 + row_offset
         ws.row_dimensions[idx].height = 21
-        vals = [r_data.status_group, r_data.So_Don, r_data.So_Luong_SP, r_data.Doanh_Thu, r_data._5, r_data._6]
+        vals = [
+            r_data['status_group'],
+            float(r_data['So_Don']),
+            float(r_data['So_Luong_SP']),
+            float(r_data['Doanh_Thu']),
+            float(r_data['Ty_Trong_Don (%)']),
+            float(r_data['Ty_Trong_DT (%)'])
+        ]
         for c_i, v in enumerate(vals, start=1):
             c = ws.cell(idx, c_i, v)
             c.font = Font(name="Segoe UI", size=9.5, bold=(c_i == 1), color="1E293B")
@@ -687,7 +688,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
             else:
                 c.alignment = Alignment(horizontal="left", vertical="center")
 
-    # Vẽ biểu đồ cột doanh thu theo 5 trạng thái ngay bên cạnh bảng (cột G)
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
@@ -702,12 +702,10 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
     chart.height = 7.5
     ws.add_chart(chart, f"G{st_start}")
 
-    # Đặt độ rộng cột chuẩn cho Sheet 1
     col_widths_s1 = {1: 24, 2: 14, 3: 15, 4: 20, 5: 13, 6: 15, 7: 22, 8: 22}
     for c_idx, w in col_widths_s1.items():
         ws.column_dimensions[get_column_letter(c_idx)].width = w
 
-    # --- SHEET 2: CHI TIẾT 5 TRẠNG THÁI THEO SÀN ---
     ws2 = wb.create_sheet("2_Trang_Thai_Theo_San")
     style_table_sheet(
         ws2, split_st,
@@ -717,7 +715,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
         int_cols=["Số đơn Shopee", "Số đơn TikTok Shop"]
     )
 
-    # --- SHEET 3: SO SÁNH 2 TUẦN (WOW) ---
     if not wow_table.empty:
         ws3 = wb.create_sheet("3_So_Sanh_2_Tuan")
         style_table_sheet(
@@ -727,7 +724,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
             growth_col="Tăng trưởng (%)"
         )
 
-    # --- SHEET 4: HIỆU SUẤT SẢN PHẨM ---
     ws4 = wb.create_sheet("4_Hieu_Suat_San_Pham")
     sku_export = sku_merged.rename(columns={
         'platform': 'Sàn TMĐT',
@@ -744,7 +740,6 @@ def build_executive_excel(m_curr, m_prev, status_df, split_st, sku_merged, cance
         int_cols=["Tổng số đơn", "SL sản phẩm"]
     )
 
-    # --- SHEET 5: PHÂN TÍCH ĐƠN HOÀN / HỦY ---
     if not cancel_summary.empty:
         ws5 = wb.create_sheet("5_Phan_Tich_Hoan_Huy")
         cancel_export = cancel_summary.rename(columns={
