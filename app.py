@@ -70,7 +70,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- HÀM VẼ THẺ KPI CÓ DÒNG CHỈ SỐ TUẦN TRƯỚC BÊN DƯỚI ---
+# --- HÀM VẼ THẺ KPI ---
 def render_kpi_card(label, curr_str, prev_str=None, pct_change=None, inverse_color=False, fallback_sub=""):
     sub_html = ""
     if prev_str is not None:
@@ -97,7 +97,7 @@ def render_kpi_card(label, curr_str, prev_str=None, pct_change=None, inverse_col
     </div>
     """, unsafe_allow_html=True)
 
-# --- HÀM CHUẨN HÓA TÊN CỘT (XÓA DẤU XUỐNG DÒNG \n & KHOẢNG TRẮNG THỪA CHO CẢ 2 SÀN) ---
+# --- HÀM CHUẨN HÓA TÊN CỘT ---
 def normalize_columns(df):
     df.columns = [re.sub(r'\s+', ' ', str(c)).strip() for c in df.columns]
     return df
@@ -109,44 +109,43 @@ def find_col(df, candidates):
             return cols_lower[cand.lower()]
     return None
 
-# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI THỐNG NHẤT CHO CẢ SHOPEE & TIKTOK ---
+# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI (ĐÃ SỬA LỖI BẮT NHẦM "NO RETURN/REFUND") ---
 def classify_order_status(raw_status, extra_status=""):
     s = str(raw_status).strip().lower()
     e = str(extra_status).strip().lower()
-    combined = f"{s} {e}"
     
-    # 1. Trả hàng / Hoàn tiền
-    if any(k in combined for k in [
-        'trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại',
-        'đã duyệt', 'chấp nhận hoàn', 'đang hoàn'
-    ]):
-        return 'Trả hàng / Hoàn tiền'
-    
-    # 2. Đơn hủy
-    if any(k in combined for k in [
-        'hủy', 'cancel', 'thất bại', 'failed', 'không thành công', 'đã đóng'
-    ]):
+    # Làm sạch cột phụ nếu chứa cụm từ phủ định (ví dụ: "No return/refund", "Không có yêu cầu")
+    negative_phrases = ['no return', 'no refund', 'không trả', 'không hoàn', 'chưa hoàn', 'none', 'nan', 'null']
+    if any(np in e for np in negative_phrases):
+        e = ""
+
+    # 1. Đơn hủy (Kiểm tra trạng thái chính trước)
+    if any(k in s for k in ['hủy', 'cancel', 'thất bại', 'failed', 'không thành công', 'đã đóng']):
         return 'Đơn hủy'
-    
+
+    # 2. Trả hàng / Hoàn tiền (Chỉ bắt khi trạng thái chính hoặc cột hoàn thực sự có yêu cầu hoàn/trả)
+    if any(k in s for k in ['trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại']):
+        return 'Trả hàng / Hoàn tiền'
+    if e != "" and any(k in e for k in ['trả hàng', 'hoàn tiền', 'return', 'refund', 'đã duyệt', 'chấp nhận']):
+        return 'Trả hàng / Hoàn tiền'
+
     # 3. Giao thành công
-    if any(k in combined for k in [
-        'hoàn thành', 'đã giao', 'completed', 'delivered'
-    ]):
+    if any(k in s for k in ['hoàn thành', 'đã giao', 'completed', 'delivered']):
         return 'Giao thành công'
-    
+
     # 4. Đang chờ giao hàng
-    if any(k in combined for k in [
+    if any(k in s for k in [
         'chờ lấy', 'chờ giao', 'chờ xác nhận', 'awaiting', 'to ship',
         'unpaid', 'on hold', 'đang chuẩn bị', 'chờ thanh toán', 'sẵn sàng giao'
     ]):
         return 'Đang chờ giao hàng'
-    
+
     # 5. Đang vận chuyển
-    if any(k in combined for k in [
+    if any(k in s for k in [
         'đang giao', 'vận chuyển', 'transit', 'shipped', 'đã bàn giao', 'shipping', 'in transit'
     ]):
         return 'Đang vận chuyển'
-    
+
     return 'Đang vận chuyển'
 
 def clean_currency(series):
@@ -194,7 +193,7 @@ def parse_tiktok(file):
     
     col_order = find_col(df, ['Order ID', 'Mã đơn hàng'])
     col_status = find_col(df, ['Order Status', 'Trạng thái đơn hàng', 'Trạng Thái Đơn Hàng'])
-    col_substatus = find_col(df, ['Order Substatus', 'Cancelation/Return Type', 'Trạng thái phụ', 'Loại hủy/trả hàng'])
+    col_substatus = find_col(df, ['Cancelation/Return Type', 'Loại hủy/trả hàng'])
     col_prod = find_col(df, ['Product Name', 'Tên sản phẩm', 'Tên Sản Phẩm'])
     col_sku = find_col(df, ['Variation', 'Seller SKU', 'Tên phân loại hàng', 'Phân loại'])
     col_qty = find_col(df, ['Quantity', 'Số lượng'])
@@ -302,10 +301,9 @@ if not df_curr_raw.empty:
     m_curr = calc_metrics(df_curr_raw, ads_curr)
     m_prev = calc_metrics(df_prev_raw, ads_prev) if not df_prev_raw.empty else None
 
-    # --- PHẦN 1: THẺ KPI TỔNG QUAN (CÓ CON SỐ TUẦN TRƯỚC BÊN DƯỚI) ---
+    # --- PHẦN 1: THẺ KPI TỔNG QUAN ---
     st.subheader("1. Tổng quan chỉ số tuần này")
     
-    # Hàng 1: Tổng doanh thu -> Doanh thu trừ hoàn/hủy -> Đã giao thành công
     r1_c1, r1_c2, r1_c3 = st.columns(3)
     with r1_c1:
         render_kpi_card(
@@ -332,7 +330,6 @@ if not df_curr_raw.empty:
             fallback_sub="Tiền hàng đã giao xong"
         )
 
-    # Hàng 2: Thất thoát hoàn/hủy -> AOV -> ROI
     r2_c1, r2_c2, r2_c3 = st.columns(3)
     with r2_c1:
         render_kpi_card(
@@ -568,7 +565,7 @@ if not df_curr_raw.empty:
 
             st.markdown("**Danh sách chi tiết Sản phẩm bị Hoàn / Hủy nhiều nhất**")
             cancel_summary = (
-                inv_df.groupby(['platform', 'status_group', 'product_name', 'reason'], as_index=False)
+                inv_df.groupby(['platform', 'status_group', 'raw_status', 'product_name', 'reason'], as_index=False)
                 .agg(So_Don_Loi=('order_id', 'nunique'), Gia_Tri_That_Thoat=('revenue', 'sum'))
                 .sort_values(by='Gia_Tri_That_Thoat', ascending=False)
             )
