@@ -22,55 +22,15 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.03);
         margin-bottom: 10px;
     }
-    .kpi-label {
-        color: #475569;
-        font-weight: 600;
-        font-size: 0.88rem;
-        margin-bottom: 4px;
-    }
-    .kpi-value {
-        color: #0F2C59;
-        font-weight: 700;
-        font-size: 1.55rem;
-        line-height: 1.25;
-        margin-bottom: 6px;
-    }
-    .kpi-sub {
-        font-size: 0.80rem;
-        color: #64748B;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 6px;
-    }
-    .badge-up {
-        background-color: #DCFCE7;
-        color: #15803D;
-        padding: 1px 7px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.76rem;
-    }
-    .badge-down {
-        background-color: #FEE2E2;
-        color: #B91C1C;
-        padding: 1px 7px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.76rem;
-    }
-    .badge-neutral {
-        background-color: #E2E8F0;
-        color: #475569;
-        padding: 1px 7px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.76rem;
-    }
+    .kpi-label { color: #475569; font-weight: 600; font-size: 0.88rem; margin-bottom: 4px; }
+    .kpi-value { color: #0F2C59; font-weight: 700; font-size: 1.55rem; line-height: 1.25; margin-bottom: 6px; }
+    .kpi-sub { font-size: 0.80rem; color: #64748B; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .badge-up { background-color: #DCFCE7; color: #15803D; padding: 1px 7px; border-radius: 12px; font-weight: 600; font-size: 0.76rem; }
+    .badge-down { background-color: #FEE2E2; color: #B91C1C; padding: 1px 7px; border-radius: 12px; font-weight: 600; font-size: 0.76rem; }
+    .badge-neutral { background-color: #E2E8F0; color: #475569; padding: 1px 7px; border-radius: 12px; font-weight: 600; font-size: 0.76rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HÀM VẼ THẺ KPI ---
 def render_kpi_card(label, curr_str, prev_str=None, pct_change=None, inverse_color=False, fallback_sub=""):
     sub_html = ""
     if prev_str is not None:
@@ -97,7 +57,6 @@ def render_kpi_card(label, curr_str, prev_str=None, pct_change=None, inverse_col
     </div>
     """, unsafe_allow_html=True)
 
-# --- HÀM CHUẨN HÓA TÊN CỘT ---
 def normalize_columns(df):
     df.columns = [re.sub(r'\s+', ' ', str(c)).strip() for c in df.columns]
     return df
@@ -109,29 +68,25 @@ def find_col(df, candidates):
             return cols_lower[cand.lower()]
     return None
 
-# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI (ĐÃ SỬA LỖI BẮT NHẦM "NO RETURN/REFUND") ---
+# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI (CHỈ DỰA TRÊN TRẠNG THÁI CHÍNH CỦA ĐƠN) ---
 def classify_order_status(raw_status, extra_status=""):
     s = str(raw_status).strip().lower()
     e = str(extra_status).strip().lower()
-    
-    # Làm sạch cột phụ nếu chứa cụm từ phủ định (ví dụ: "No return/refund", "Không có yêu cầu")
-    negative_phrases = ['no return', 'no refund', 'không trả', 'không hoàn', 'chưa hoàn', 'none', 'nan', 'null']
-    if any(np in e for np in negative_phrases):
-        e = ""
 
-    # 1. Đơn hủy (Kiểm tra trạng thái chính trước)
+    # 1. Giao thành công (Ưu tiên kiểm tra trước để tránh nhầm chữ "hoàn" trong "hoàn thành")
+    if any(k in s for k in ['hoàn thành', 'đã giao', 'completed', 'delivered']):
+        # Chỉ chuyển sang Trả hàng/Hoàn tiền nếu cột hoàn tiền thực sự có trạng thái đã duyệt hoàn
+        if any(k in e for k in ['đã chấp nhận', 'đã hoàn tiền', 'hoàn tiền thành công', 'refunded', 'returned']):
+            return 'Trả hàng / Hoàn tiền'
+        return 'Giao thành công'
+
+    # 2. Đơn hủy
     if any(k in s for k in ['hủy', 'cancel', 'thất bại', 'failed', 'không thành công', 'đã đóng']):
         return 'Đơn hủy'
 
-    # 2. Trả hàng / Hoàn tiền (Chỉ bắt khi trạng thái chính hoặc cột hoàn thực sự có yêu cầu hoàn/trả)
+    # 3. Trả hàng / Hoàn tiền
     if any(k in s for k in ['trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại']):
         return 'Trả hàng / Hoàn tiền'
-    if e != "" and any(k in e for k in ['trả hàng', 'hoàn tiền', 'return', 'refund', 'đã duyệt', 'chấp nhận']):
-        return 'Trả hàng / Hoàn tiền'
-
-    # 3. Giao thành công
-    if any(k in s for k in ['hoàn thành', 'đã giao', 'completed', 'delivered']):
-        return 'Giao thành công'
 
     # 4. Đang chờ giao hàng
     if any(k in s for k in [
@@ -154,7 +109,6 @@ def clean_currency(series):
     s = s.str.replace(',', '', regex=False).str.strip()
     return pd.to_numeric(s, errors='coerce').fillna(0)
 
-# --- BỘ ĐỌC DỮ LIỆU SHOPEE ---
 def parse_shopee(file):
     df = pd.read_excel(file)
     df = normalize_columns(df)
@@ -186,7 +140,6 @@ def parse_shopee(file):
     out['is_valid'] = ~out['status_group'].isin(['Đơn hủy', 'Trả hàng / Hoàn tiền'])
     return out
 
-# --- BỘ ĐỌC DỮ LIỆU TIKTOK SHOP ---
 def parse_tiktok(file):
     df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
     df = normalize_columns(df)
@@ -575,6 +528,15 @@ if not df_curr_raw.empty:
             )
         else:
             st.success("🎉 Tuần này không ghi nhận đơn hàng nào bị hủy hoặc hoàn trả.")
+
+        # Bảng kiểm tra trạng thái gốc của tuần trước (giúp bắt lỗi nếu file tuần trước có cột đặc biệt)
+        if m_prev is not None:
+            with st.expander("🔍 Kiểm tra trạng thái gốc của file Tuần trước"):
+                prev_diag = m_prev['full_df'].groupby(['platform', 'raw_status', 'status_group'], as_index=False).agg(
+                    So_Don=('order_id', 'nunique'),
+                    Gia_Tri=('revenue', 'sum')
+                )
+                st.dataframe(prev_diag, use_container_width=True)
 
     # --- NÚT TẢI FILE EXCEL TỔNG HỢP ---
     st.divider()
