@@ -11,20 +11,91 @@ st.markdown("""
 <style>
     .main { background-color: #FFFFFF; }
     h1, h2, h3 { color: #0F2C59; font-family: 'Segoe UI', sans-serif; }
-    div[data-testid="metric-container"] {
+    .kpi-card {
         background-color: #F8FAFC;
         border-left: 5px solid #0F2C59;
         border-top: 1px solid #E2E8F0;
         border-right: 1px solid #E2E8F0;
         border-bottom: 1px solid #E2E8F0;
-        padding: 14px;
+        padding: 14px 16px;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+        margin-bottom: 10px;
     }
-    div[data-testid="metric-container"] label { color: #475569; font-weight: 600; font-size: 0.9rem; }
-    div[data-testid="metric-container"] div[data-testid="stMetricValue"] { color: #0F2C59; font-size: 1.55rem; }
+    .kpi-label {
+        color: #475569;
+        font-weight: 600;
+        font-size: 0.88rem;
+        margin-bottom: 4px;
+    }
+    .kpi-value {
+        color: #0F2C59;
+        font-weight: 700;
+        font-size: 1.55rem;
+        line-height: 1.25;
+        margin-bottom: 6px;
+    }
+    .kpi-sub {
+        font-size: 0.80rem;
+        color: #64748B;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .badge-up {
+        background-color: #DCFCE7;
+        color: #15803D;
+        padding: 1px 7px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.76rem;
+    }
+    .badge-down {
+        background-color: #FEE2E2;
+        color: #B91C1C;
+        padding: 1px 7px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.76rem;
+    }
+    .badge-neutral {
+        background-color: #E2E8F0;
+        color: #475569;
+        padding: 1px 7px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.76rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# --- HÀM VẼ THẺ KPI CÓ DÒNG CHỈ SỐ TUẦN TRƯỚC BÊN DƯỚI ---
+def render_kpi_card(label, curr_str, prev_str=None, pct_change=None, inverse_color=False, fallback_sub=""):
+    sub_html = ""
+    if prev_str is not None:
+        badge_html = ""
+        if pct_change is not None:
+            is_positive = pct_change > 0
+            if inverse_color:
+                badge_cls = "badge-down" if is_positive else ("badge-up" if pct_change < 0 else "badge-neutral")
+            else:
+                badge_cls = "badge-up" if is_positive else ("badge-down" if pct_change < 0 else "badge-neutral")
+            arrow = "↑" if pct_change > 0 else ("↓" if pct_change < 0 else "→")
+            badge_html = f'<span class="{badge_cls}">{arrow} {pct_change:+.1f}%</span>'
+        sub_html = f'<div class="kpi-sub"><span>Tuần trước: <b>{prev_str}</b></span> {badge_html}</div>'
+    elif fallback_sub:
+        sub_html = f'<div class="kpi-sub"><span class="badge-neutral">{fallback_sub}</span></div>'
+    else:
+        sub_html = '<div class="kpi-sub">&nbsp;</div>'
+
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value">{curr_str}</div>
+        {sub_html}
+    </div>
+    """, unsafe_allow_html=True)
 
 # --- HÀM CHUẨN HÓA TÊN CỘT (XÓA DẤU XUỐNG DÒNG \n & KHOẢNG TRẮNG THỪA CHO CẢ 2 SÀN) ---
 def normalize_columns(df):
@@ -190,6 +261,11 @@ def calc_metrics(df, ad_spend=0):
         'valid_df': valid, 'invalid_df': invalid, 'full_df': df
     }
 
+def calc_pct(curr_val, prev_val):
+    if prev_val == 0:
+        return None
+    return ((curr_val - prev_val) / prev_val) * 100
+
 def to_excel(df_summary, df_status, df_sku, df_cancel, df_wow):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -214,7 +290,7 @@ with st.sidebar:
 
     st.divider()
     st.header("⏮️ Dữ liệu TUẦN TRƯỚC (Tùy chọn)")
-    st.caption("Tải thêm file tuần trước để tự động tính % tăng trưởng:")
+    st.caption("Tải thêm file tuần trước để tự động đối chiếu bên dưới từng chỉ số:")
     sp_prev = st.file_uploader("Shopee Tuần trước (.xlsx)", type=['xlsx'], key="sp_prev")
     tt_prev = st.file_uploader("TikTok Tuần trước (.csv, .xlsx)", type=['csv', 'xlsx'], key="tt_prev")
     ads_prev = st.number_input("Chi phí Ads Tuần trước (VNĐ)", min_value=0, value=0, step=100000)
@@ -226,51 +302,66 @@ if not df_curr_raw.empty:
     m_curr = calc_metrics(df_curr_raw, ads_curr)
     m_prev = calc_metrics(df_prev_raw, ads_prev) if not df_prev_raw.empty else None
 
-    def fmt_delta(curr_val, prev_val):
-        if m_prev is None or prev_val == 0:
-            return None
-        pct = ((curr_val - prev_val) / prev_val) * 100
-        return f"{pct:+.1f}% so với tuần trước"
-
-    # --- PHẦN 1: THẺ KPI TỔNG QUAN (2 HÀNG x 3 CỘT) ---
+    # --- PHẦN 1: THẺ KPI TỔNG QUAN (CÓ CON SỐ TUẦN TRƯỚC BÊN DƯỚI) ---
     st.subheader("1. Tổng quan chỉ số tuần này")
     
     # Hàng 1: Tổng doanh thu -> Doanh thu trừ hoàn/hủy -> Đã giao thành công
     r1_c1, r1_c2, r1_c3 = st.columns(3)
-    r1_c1.metric(
-        "Tổng doanh thu (GMV)",
-        f"{m_curr['gmv']:,.0f} đ",
-        fmt_delta(m_curr['gmv'], m_prev['gmv']) if m_prev else f"Tổng {m_curr['tot_orders']:,} đơn đặt"
-    )
-    r1_c2.metric(
-        "Doanh thu trừ Hoàn/Hủy",
-        f"{m_curr['net_rev']:,.0f} đ",
-        fmt_delta(m_curr['net_rev'], m_prev['net_rev']) if m_prev else f"{m_curr['val_orders']:,} đơn hợp lệ"
-    )
-    r1_c3.metric(
-        "Đã giao thành công",
-        f"{m_curr['delivered_rev']:,.0f} đ",
-        fmt_delta(m_curr['delivered_rev'], m_prev['delivered_rev']) if m_prev else "Tiền hàng đã giao xong"
-    )
+    with r1_c1:
+        render_kpi_card(
+            label="Tổng doanh thu (GMV)",
+            curr_str=f"{m_curr['gmv']:,.0f} đ",
+            prev_str=f"{m_prev['gmv']:,.0f} đ" if m_prev else None,
+            pct_change=calc_pct(m_curr['gmv'], m_prev['gmv']) if m_prev else None,
+            fallback_sub=f"Tổng {m_curr['tot_orders']:,} đơn đặt"
+        )
+    with r1_c2:
+        render_kpi_card(
+            label="Doanh thu trừ Hoàn/Hủy",
+            curr_str=f"{m_curr['net_rev']:,.0f} đ",
+            prev_str=f"{m_prev['net_rev']:,.0f} đ" if m_prev else None,
+            pct_change=calc_pct(m_curr['net_rev'], m_prev['net_rev']) if m_prev else None,
+            fallback_sub=f"{m_curr['val_orders']:,} đơn hợp lệ"
+        )
+    with r1_c3:
+        render_kpi_card(
+            label="Đã giao thành công",
+            curr_str=f"{m_curr['delivered_rev']:,.0f} đ",
+            prev_str=f"{m_prev['delivered_rev']:,.0f} đ" if m_prev else None,
+            pct_change=calc_pct(m_curr['delivered_rev'], m_prev['delivered_rev']) if m_prev else None,
+            fallback_sub="Tiền hàng đã giao xong"
+        )
 
     # Hàng 2: Thất thoát hoàn/hủy -> AOV -> ROI
     r2_c1, r2_c2, r2_c3 = st.columns(3)
-    r2_c1.metric(
-        "Thất thoát Hoàn / Hủy",
-        f"-{m_curr['lost_rev']:,.0f} đ",
-        f"{m_curr['inv_orders']:,} đơn ({m_curr['cancel_rate']:.1f}%)",
-        delta_color="inverse"
-    )
-    r2_c2.metric(
-        "Giá trị TB đơn (AOV)",
-        f"{m_curr['aov']:,.0f} đ",
-        fmt_delta(m_curr['aov'], m_prev['aov']) if m_prev else f"Tính trên {m_curr['val_orders']:,} đơn"
-    )
-    r2_c3.metric(
-        "ROI Thực Tế (Net/Ads)",
-        f"{m_curr['roi']:.2f}" if ads_curr > 0 else "Chưa nhập Ads",
-        fmt_delta(m_curr['roi'], m_prev['roi']) if (m_prev and ads_curr > 0 and ads_prev > 0) else None
-    )
+    with r2_c1:
+        render_kpi_card(
+            label=f"Thất thoát Hoàn / Hủy ({m_curr['inv_orders']:,} đơn - {m_curr['cancel_rate']:.1f}%)",
+            curr_str=f"-{m_curr['lost_rev']:,.0f} đ",
+            prev_str=f"-{m_prev['lost_rev']:,.0f} đ ({m_prev['cancel_rate']:.1f}%)" if m_prev else None,
+            pct_change=calc_pct(m_curr['lost_rev'], m_prev['lost_rev']) if m_prev else None,
+            inverse_color=True,
+            fallback_sub=f"{m_curr['inv_orders']:,} đơn hoàn/hủy"
+        )
+    with r2_c2:
+        render_kpi_card(
+            label="Giá trị TB đơn (AOV)",
+            curr_str=f"{m_curr['aov']:,.0f} đ",
+            prev_str=f"{m_prev['aov']:,.0f} đ" if m_prev else None,
+            pct_change=calc_pct(m_curr['aov'], m_prev['aov']) if m_prev else None,
+            fallback_sub=f"Tính trên {m_curr['val_orders']:,} đơn"
+        )
+    with r2_c3:
+        curr_roi_str = f"{m_curr['roi']:.2f}" if ads_curr > 0 else "Chưa nhập Ads"
+        prev_roi_str = f"{m_prev['roi']:.2f}" if (m_prev and ads_prev > 0) else ("Chưa nhập Ads" if m_prev else None)
+        roi_pct = calc_pct(m_curr['roi'], m_prev['roi']) if (m_prev and ads_curr > 0 and ads_prev > 0) else None
+        render_kpi_card(
+            label="ROI Thực Tế (Net/Ads)",
+            curr_str=curr_roi_str,
+            prev_str=prev_roi_str,
+            pct_change=roi_pct,
+            fallback_sub=f"Ads: {ads_curr:,.0f} đ" if ads_curr > 0 else "Nhập chi phí Ads ở cột trái"
+        )
 
     # --- PHẦN 2: BẢNG & BIỂU ĐỒ PHÂN BỔ 5 NHÓM TRẠNG THÁI ---
     st.divider()
