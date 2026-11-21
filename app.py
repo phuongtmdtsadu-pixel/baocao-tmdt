@@ -21,8 +21,8 @@ st.markdown("""
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.03);
     }
-    div[data-testid="metric-container"] label { color: #475569; font-weight: 600; font-size: 0.88rem; }
-    div[data-testid="metric-container"] div[data-testid="stMetricValue"] { color: #0F2C59; font-size: 1.45rem; }
+    div[data-testid="metric-container"] label { color: #475569; font-weight: 600; font-size: 0.9rem; }
+    div[data-testid="metric-container"] div[data-testid="stMetricValue"] { color: #0F2C59; font-size: 1.55rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,14 +44,14 @@ def classify_order_status(raw_status, extra_status=""):
     e = str(extra_status).strip().lower()
     combined = f"{s} {e}"
     
-    # 1. Trả hàng / Hoàn tiền (Kiểm tra cả trạng thái chính và trạng thái phụ/hoàn tiền của 2 sàn)
+    # 1. Trả hàng / Hoàn tiền
     if any(k in combined for k in [
         'trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại',
         'đã duyệt', 'chấp nhận hoàn', 'đang hoàn'
     ]):
         return 'Trả hàng / Hoàn tiền'
     
-    # 2. Đơn hủy (Bao gồm giao thất bại / hủy bởi người mua, người bán, hệ thống)
+    # 2. Đơn hủy
     if any(k in combined for k in [
         'hủy', 'cancel', 'thất bại', 'failed', 'không thành công', 'đã đóng'
     ]):
@@ -63,14 +63,14 @@ def classify_order_status(raw_status, extra_status=""):
     ]):
         return 'Giao thành công'
     
-    # 4. Đang chờ giao hàng (Chưa bàn giao cho ĐVVC / Chờ lấy hàng / Chờ thanh toán)
+    # 4. Đang chờ giao hàng
     if any(k in combined for k in [
         'chờ lấy', 'chờ giao', 'chờ xác nhận', 'awaiting', 'to ship',
         'unpaid', 'on hold', 'đang chuẩn bị', 'chờ thanh toán', 'sẵn sàng giao'
     ]):
         return 'Đang chờ giao hàng'
     
-    # 5. Đang vận chuyển (Đã bàn giao ĐVVC, đang trên đường giao)
+    # 5. Đang vận chuyển
     if any(k in combined for k in [
         'đang giao', 'vận chuyển', 'transit', 'shipped', 'đã bàn giao', 'shipping', 'in transit'
     ]):
@@ -79,7 +79,6 @@ def classify_order_status(raw_status, extra_status=""):
     return 'Đang vận chuyển'
 
 def clean_currency(series):
-    # Xử lý chuẩn cả định dạng số lẫn chuỗi có chữ VND/đ hoặc dấu phẩy ngăn cách hàng nghìn
     s = series.astype(str).str.replace('VND', '', case=False, regex=False)
     s = s.str.replace('đ', '', case=False, regex=False)
     s = s.str.replace(',', '', regex=False).str.strip()
@@ -96,11 +95,9 @@ def parse_shopee(file):
     col_prod = find_col(df, ['Tên sản phẩm', 'Tên Sản Phẩm', 'Product Name'])
     col_sku = find_col(df, ['Tên phân loại hàng', 'SKU phân loại hàng', 'Variation'])
     col_qty = find_col(df, ['Số lượng', 'Quantity'])
-    # Dùng giá theo từng dòng sản phẩm để không bị cộng trùng khi 1 đơn có nhiều món
     col_rev = find_col(df, ['Tổng số tiền Người mua thanh toán', 'Giá ưu đãi', 'Tổng giá bán (sản phẩm)'])
     col_reason = find_col(df, ['Lý do hủy', 'Lý do Hủy', 'Lý do Trả hàng/Hoàn tiền', 'Ghi chú'])
 
-    # Loại bỏ dòng trống hoặc dòng giải thích nếu có
     if col_order:
         df = df[df[col_order].notna() & (df[col_order].astype(str).str.strip() != '')].copy()
 
@@ -119,7 +116,7 @@ def parse_shopee(file):
     out['is_valid'] = ~out['status_group'].isin(['Đơn hủy', 'Trả hàng / Hoàn tiền'])
     return out
 
-# --- BỘ ĐỌC DỮ LIỆU TIKTOK SHOP (ĐỒNG BỘ QUY TẮC VỚI SHOPEE) ---
+# --- BỘ ĐỌC DỮ LIỆU TIKTOK SHOP ---
 def parse_tiktok(file):
     df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
     df = normalize_columns(df)
@@ -130,7 +127,6 @@ def parse_tiktok(file):
     col_prod = find_col(df, ['Product Name', 'Tên sản phẩm', 'Tên Sản Phẩm'])
     col_sku = find_col(df, ['Variation', 'Seller SKU', 'Tên phân loại hàng', 'Phân loại'])
     col_qty = find_col(df, ['Quantity', 'Số lượng'])
-    # Dùng giá theo từng dòng SKU để chống nhân đôi doanh thu khi 1 đơn TikTok có nhiều SKU
     col_rev = find_col(df, [
         'SKU Subtotal After Discount',
         'Tổng phụ SKU sau giảm giá',
@@ -140,7 +136,6 @@ def parse_tiktok(file):
     ])
     col_reason = find_col(df, ['Cancel Reason', 'Return Reason', 'Lý do hủy', 'Lý do trả hàng', 'Cancel By', 'Người hủy'])
 
-    # Loại bỏ dòng giải thích phụ (nếu file TikTok có dòng mô tả cột ngay dưới tiêu đề)
     if col_order:
         df = df[df[col_order].notna()].copy()
         df = df[~df[col_order].astype(str).str.lower().str.contains('order id|mã đơn|platform unique', na=False)].copy()
@@ -237,31 +232,41 @@ if not df_curr_raw.empty:
         pct = ((curr_val - prev_val) / prev_val) * 100
         return f"{pct:+.1f}% so với tuần trước"
 
-    # --- PHẦN 1: THẺ KPI TỔNG QUAN ---
+    # --- PHẦN 1: THẺ KPI TỔNG QUAN (2 HÀNG x 3 CỘT) ---
     st.subheader("1. Tổng quan chỉ số tuần này")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric(
+    
+    # Hàng 1: Tổng doanh thu -> Doanh thu trừ hoàn/hủy -> Đã giao thành công
+    r1_c1, r1_c2, r1_c3 = st.columns(3)
+    r1_c1.metric(
+        "Tổng doanh thu (GMV)",
+        f"{m_curr['gmv']:,.0f} đ",
+        fmt_delta(m_curr['gmv'], m_prev['gmv']) if m_prev else f"Tổng {m_curr['tot_orders']:,} đơn đặt"
+    )
+    r1_c2.metric(
         "Doanh thu trừ Hoàn/Hủy",
         f"{m_curr['net_rev']:,.0f} đ",
-        fmt_delta(m_curr['net_rev'], m_prev['net_rev']) if m_prev else f"Tổng đặt: {m_curr['gmv']:,.0f} đ"
+        fmt_delta(m_curr['net_rev'], m_prev['net_rev']) if m_prev else f"{m_curr['val_orders']:,} đơn hợp lệ"
     )
-    c2.metric(
+    r1_c3.metric(
         "Đã giao thành công",
         f"{m_curr['delivered_rev']:,.0f} đ",
         fmt_delta(m_curr['delivered_rev'], m_prev['delivered_rev']) if m_prev else "Tiền hàng đã giao xong"
     )
-    c3.metric(
+
+    # Hàng 2: Thất thoát hoàn/hủy -> AOV -> ROI
+    r2_c1, r2_c2, r2_c3 = st.columns(3)
+    r2_c1.metric(
         "Thất thoát Hoàn / Hủy",
         f"-{m_curr['lost_rev']:,.0f} đ",
         f"{m_curr['inv_orders']:,} đơn ({m_curr['cancel_rate']:.1f}%)",
         delta_color="inverse"
     )
-    c4.metric(
+    r2_c2.metric(
         "Giá trị TB đơn (AOV)",
         f"{m_curr['aov']:,.0f} đ",
-        fmt_delta(m_curr['aov'], m_prev['aov']) if m_prev else f"{m_curr['val_orders']:,} đơn hợp lệ"
+        fmt_delta(m_curr['aov'], m_prev['aov']) if m_prev else f"Tính trên {m_curr['val_orders']:,} đơn"
     )
-    c5.metric(
+    r2_c3.metric(
         "ROI Thực Tế (Net/Ads)",
         f"{m_curr['roi']:.2f}" if ads_curr > 0 else "Chưa nhập Ads",
         fmt_delta(m_curr['roi'], m_prev['roi']) if (m_prev and ads_curr > 0 and ads_prev > 0) else None
@@ -386,7 +391,7 @@ if not df_curr_raw.empty:
         if m_prev is not None:
             st.markdown("**Bảng so sánh tăng trưởng 2 tuần liên tiếp (WoW)**")
             metrics_list = [
-                ("Tổng giá trị đặt (GMV)", m_prev['gmv'], m_curr['gmv']),
+                ("Tổng doanh thu (GMV)", m_prev['gmv'], m_curr['gmv']),
                 ("Doanh thu trừ hoàn/hủy", m_prev['net_rev'], m_curr['net_rev']),
                 ("Doanh thu đã giao thành công", m_prev['delivered_rev'], m_curr['delivered_rev']),
                 ("Thất thoát do hoàn/hủy", m_prev['lost_rev'], m_curr['lost_rev']),
@@ -486,7 +491,7 @@ if not df_curr_raw.empty:
     # --- NÚT TẢI FILE EXCEL TỔNG HỢP ---
     st.divider()
     summary_export = pd.DataFrame([{
-        'Tong_Dat_Hang_GMV': m_curr['gmv'],
+        'Tong_Doanh_Thu_GMV': m_curr['gmv'],
         'Doanh_Thu_Tru_Hoan_Huy': m_curr['net_rev'],
         'Da_Giao_Thanh_Cong': m_curr['delivered_rev'],
         'Tien_Hoan_Huy': m_curr['lost_rev'],
