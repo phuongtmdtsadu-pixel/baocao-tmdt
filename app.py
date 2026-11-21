@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from io import BytesIO
+import re
 
 # --- CẤU HÌNH GIAO DIỆN (TRẮNG - XANH NAVY - VÀNG GOLD) ---
 st.set_page_config(page_title="Dashboard Báo Cáo Tuần TMĐT", page_icon="📊", layout="wide")
@@ -25,86 +26,136 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI CHUẨN SHOPEE & TIKTOK ---
-def classify_order_status(raw_status):
+# --- HÀM CHUẨN HÓA TÊN CỘT (XÓA DẤU XUỐNG DÒNG \n & KHOẢNG TRẮNG THỪA CHO CẢ 2 SÀN) ---
+def normalize_columns(df):
+    df.columns = [re.sub(r'\s+', ' ', str(c)).strip() for c in df.columns]
+    return df
+
+def find_col(df, candidates):
+    cols_lower = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    return None
+
+# --- HÀM PHÂN LOẠI 5 NHÓM TRẠNG THÁI THỐNG NHẤT CHO CẢ SHOPEE & TIKTOK ---
+def classify_order_status(raw_status, extra_status=""):
     s = str(raw_status).strip().lower()
+    e = str(extra_status).strip().lower()
+    combined = f"{s} {e}"
     
-    # 1. Trả hàng / Hoàn tiền (Ưu tiên kiểm tra trước vì có thể chứa từ "giao" hoặc "hoàn")
-    if any(k in s for k in ['trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại']):
+    # 1. Trả hàng / Hoàn tiền (Kiểm tra cả trạng thái chính và trạng thái phụ/hoàn tiền của 2 sàn)
+    if any(k in combined for k in [
+        'trả hàng', 'hoàn tiền', 'return', 'refund', 'khiếu nại',
+        'đã duyệt', 'chấp nhận hoàn', 'đang hoàn'
+    ]):
         return 'Trả hàng / Hoàn tiền'
     
-    # 2. Đơn hủy (Bao gồm giao thất bại / hoàn về kho)
-    if any(k in s for k in ['hủy', 'cancel', 'thất bại', 'failed', 'không thành công']):
+    # 2. Đơn hủy (Bao gồm giao thất bại / hủy bởi người mua, người bán, hệ thống)
+    if any(k in combined for k in [
+        'hủy', 'cancel', 'thất bại', 'failed', 'không thành công', 'đã đóng'
+    ]):
         return 'Đơn hủy'
     
     # 3. Giao thành công
-    if any(k in s for k in ['hoàn thành', 'đã giao', 'completed', 'delivered']):
+    if any(k in combined for k in [
+        'hoàn thành', 'đã giao', 'completed', 'delivered'
+    ]):
         return 'Giao thành công'
     
-    # 4. Đang chờ giao hàng (Chưa bàn giao cho ĐVVC)
-    if any(k in s for k in ['chờ lấy', 'chờ giao', 'chờ xác nhận', 'awaiting', 'to ship', 'unpaid', 'on hold', 'đang chuẩn bị']):
+    # 4. Đang chờ giao hàng (Chưa bàn giao cho ĐVVC / Chờ lấy hàng / Chờ thanh toán)
+    if any(k in combined for k in [
+        'chờ lấy', 'chờ giao', 'chờ xác nhận', 'awaiting', 'to ship',
+        'unpaid', 'on hold', 'đang chuẩn bị', 'chờ thanh toán', 'sẵn sàng giao'
+    ]):
         return 'Đang chờ giao hàng'
     
     # 5. Đang vận chuyển (Đã bàn giao ĐVVC, đang trên đường giao)
-    if any(k in s for k in ['đang giao', 'vận chuyển', 'transit', 'shipped', 'đã bàn giao', 'shipping']):
+    if any(k in combined for k in [
+        'đang giao', 'vận chuyển', 'transit', 'shipped', 'đã bàn giao', 'shipping', 'in transit'
+    ]):
         return 'Đang vận chuyển'
     
     return 'Đang vận chuyển'
 
-def find_col(df, candidates):
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
+def clean_currency(series):
+    # Xử lý chuẩn cả định dạng số lẫn chuỗi có chữ VND/đ hoặc dấu phẩy ngăn cách hàng nghìn
+    s = series.astype(str).str.replace('VND', '', case=False, regex=False)
+    s = s.str.replace('đ', '', case=False, regex=False)
+    s = s.str.replace(',', '', regex=False).str.strip()
+    return pd.to_numeric(s, errors='coerce').fillna(0)
 
+# --- BỘ ĐỌC DỮ LIỆU SHOPEE ---
 def parse_shopee(file):
     df = pd.read_excel(file)
+    df = normalize_columns(df)
+    
     col_order = find_col(df, ['Mã đơn hàng', 'Order ID'])
-    col_status = find_col(df, ['Trạng thái Đơn Hàng', 'Trạng thái đơn hàng', 'Order Status'])
-    col_prod = find_col(df, ['Tên Sản Phẩm', 'Tên sản phẩm', 'Product Name'])
+    col_status = find_col(df, ['Trạng Thái Đơn Hàng', 'Trạng thái đơn hàng', 'Order Status'])
+    col_return = find_col(df, ['Trạng thái Trả hàng/Hoàn tiền', 'Trạng thái trả hàng'])
+    col_prod = find_col(df, ['Tên sản phẩm', 'Tên Sản Phẩm', 'Product Name'])
     col_sku = find_col(df, ['Tên phân loại hàng', 'SKU phân loại hàng', 'Variation'])
     col_qty = find_col(df, ['Số lượng', 'Quantity'])
-    col_rev = find_col(df, ['Tổng giá bán (sản phẩm)', 'Tổng số tiền người mua thanh toán', 'Doanh thu'])
-    col_reason = find_col(df, ['Lý do Hủy', 'Lý do hủy', 'Lý do Trả hàng/Hoàn tiền', 'Ghi chú'])
+    # Dùng giá theo từng dòng sản phẩm để không bị cộng trùng khi 1 đơn có nhiều món
+    col_rev = find_col(df, ['Tổng số tiền Người mua thanh toán', 'Giá ưu đãi', 'Tổng giá bán (sản phẩm)'])
+    col_reason = find_col(df, ['Lý do hủy', 'Lý do Hủy', 'Lý do Trả hàng/Hoàn tiền', 'Ghi chú'])
+
+    # Loại bỏ dòng trống hoặc dòng giải thích nếu có
+    if col_order:
+        df = df[df[col_order].notna() & (df[col_order].astype(str).str.strip() != '')].copy()
 
     out = pd.DataFrame()
-    out['order_id'] = df[col_order] if col_order else df.index
-    out['raw_status'] = df[col_status].astype(str) if col_status else 'Hoàn thành'
-    out['status_group'] = out['raw_status'].apply(classify_order_status)
-    out['product_name'] = df[col_prod].astype(str) if col_prod else 'Sản phẩm Shopee'
-    out['sku'] = df[col_sku].fillna('Mặc định').astype(str) if col_sku else 'Mặc định'
+    out['order_id'] = df[col_order].astype(str).str.strip() if col_order else df.index.astype(str)
+    out['raw_status'] = df[col_status].astype(str).str.strip() if col_status else 'Hoàn thành'
+    ret_series = df[col_return].fillna('').astype(str) if col_return else pd.Series([''] * len(df), index=df.index)
+    
+    out['status_group'] = [classify_order_status(st_val, rt_val) for st_val, rt_val in zip(out['raw_status'], ret_series)]
+    out['product_name'] = df[col_prod].fillna('Sản phẩm Shopee').astype(str).str.strip() if col_prod else 'Sản phẩm Shopee'
+    out['sku'] = df[col_sku].fillna('Mặc định').astype(str).str.strip() if col_sku else 'Mặc định'
     out['qty'] = pd.to_numeric(df[col_qty], errors='coerce').fillna(0) if col_qty else 1
-    out['revenue'] = pd.to_numeric(df[col_rev], errors='coerce').fillna(0) if col_rev else 0
-    out['reason'] = df[col_reason].fillna('Không rõ lý do').astype(str) if col_reason else 'Không có dữ liệu lý do'
+    out['revenue'] = clean_currency(df[col_rev]) if col_rev else 0
+    out['reason'] = df[col_reason].replace(['', 'nan', 'None'], pd.NA).fillna('Không rõ lý do').astype(str).str.strip() if col_reason else 'Không có dữ liệu lý do'
     out['platform'] = 'Shopee'
     out['is_valid'] = ~out['status_group'].isin(['Đơn hủy', 'Trả hàng / Hoàn tiền'])
     return out
 
+# --- BỘ ĐỌC DỮ LIỆU TIKTOK SHOP (ĐỒNG BỘ QUY TẮC VỚI SHOPEE) ---
 def parse_tiktok(file):
     df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+    df = normalize_columns(df)
+    
     col_order = find_col(df, ['Order ID', 'Mã đơn hàng'])
-    col_status = find_col(df, ['Order Status', 'Trạng thái đơn hàng'])
-    col_prod = find_col(df, ['Product Name', 'Tên sản phẩm'])
-    col_sku = find_col(df, ['Variation', 'Seller SKU', 'Phân loại'])
+    col_status = find_col(df, ['Order Status', 'Trạng thái đơn hàng', 'Trạng Thái Đơn Hàng'])
+    col_substatus = find_col(df, ['Order Substatus', 'Cancelation/Return Type', 'Trạng thái phụ', 'Loại hủy/trả hàng'])
+    col_prod = find_col(df, ['Product Name', 'Tên sản phẩm', 'Tên Sản Phẩm'])
+    col_sku = find_col(df, ['Variation', 'Seller SKU', 'Tên phân loại hàng', 'Phân loại'])
     col_qty = find_col(df, ['Quantity', 'Số lượng'])
-    col_rev = find_col(df, ['SKU Subtotal After Discount', 'Order Amount', 'Total settlement amount'])
-    col_reason = find_col(df, ['Cancel Reason', 'Return Reason', 'Cancel By', 'Lý do hủy'])
+    # Dùng giá theo từng dòng SKU để chống nhân đôi doanh thu khi 1 đơn TikTok có nhiều SKU
+    col_rev = find_col(df, [
+        'SKU Subtotal After Discount',
+        'Tổng phụ SKU sau giảm giá',
+        'SKU Subtotal Before Discount',
+        'Order Amount',
+        'Tổng số tiền đơn hàng'
+    ])
+    col_reason = find_col(df, ['Cancel Reason', 'Return Reason', 'Lý do hủy', 'Lý do trả hàng', 'Cancel By', 'Người hủy'])
+
+    # Loại bỏ dòng giải thích phụ (nếu file TikTok có dòng mô tả cột ngay dưới tiêu đề)
+    if col_order:
+        df = df[df[col_order].notna()].copy()
+        df = df[~df[col_order].astype(str).str.lower().str.contains('order id|mã đơn|platform unique', na=False)].copy()
 
     out = pd.DataFrame()
-    out['order_id'] = df[col_order] if col_order else df.index
-    out['raw_status'] = df[col_status].astype(str) if col_status else 'Completed'
-    out['status_group'] = out['raw_status'].apply(classify_order_status)
-    out['product_name'] = df[col_prod].astype(str) if col_prod else 'Sản phẩm TikTok'
-    out['sku'] = df[col_sku].fillna('Mặc định').astype(str) if col_sku else 'Mặc định'
-    out['qty'] = pd.to_numeric(df[col_qty], errors='coerce').fillna(0) if col_qty else 1
+    out['order_id'] = df[col_order].astype(str).str.strip() if col_order else df.index.astype(str)
+    out['raw_status'] = df[col_status].astype(str).str.strip() if col_status else 'Completed'
+    sub_series = df[col_substatus].fillna('').astype(str) if col_substatus else pd.Series([''] * len(df), index=df.index)
     
-    if col_rev:
-        clean_rev = df[col_rev].astype(str).str.replace(r'[^\d.]', '', regex=True)
-        out['revenue'] = pd.to_numeric(clean_rev, errors='coerce').fillna(0)
-    else:
-        out['revenue'] = 0
-
-    out['reason'] = df[col_reason].fillna('Không rõ lý do').astype(str) if col_reason else 'Không có dữ liệu lý do'
+    out['status_group'] = [classify_order_status(st_val, sb_val) for st_val, sb_val in zip(out['raw_status'], sub_series)]
+    out['product_name'] = df[col_prod].fillna('Sản phẩm TikTok').astype(str).str.strip() if col_prod else 'Sản phẩm TikTok'
+    out['sku'] = df[col_sku].fillna('Mặc định').astype(str).str.strip() if col_sku else 'Mặc định'
+    out['qty'] = pd.to_numeric(df[col_qty], errors='coerce').fillna(0) if col_qty else 1
+    out['revenue'] = clean_currency(df[col_rev]) if col_rev else 0
+    out['reason'] = df[col_reason].replace(['', 'nan', 'None'], pd.NA).fillna('Không rõ lý do').astype(str).str.strip() if col_reason else 'Không có dữ liệu lý do'
     out['platform'] = 'TikTok Shop'
     out['is_valid'] = ~out['status_group'].isin(['Đơn hủy', 'Trả hàng / Hoàn tiền'])
     return out
@@ -125,8 +176,8 @@ def calc_metrics(df, ad_spend=0):
     delivered = df[df['status_group'] == 'Giao thành công']
     
     gmv = df['revenue'].sum()
-    net_rev = valid['revenue'].sum()             # Doanh thu trừ hoàn/hủy (Thành công + Đang giao + Chờ giao)
-    delivered_rev = delivered['revenue'].sum() # Doanh thu đã giao thành công 100%
+    net_rev = valid['revenue'].sum()
+    delivered_rev = delivered['revenue'].sum()
     lost_rev = invalid['revenue'].sum()
     
     tot_orders = df['order_id'].nunique()
@@ -158,7 +209,7 @@ def to_excel(df_summary, df_status, df_sku, df_cancel, df_wow):
 
 # --- GIAO DIỆN CHÍNH ---
 st.title("📊 HỆ THỐNG BÁO CÁO HIỆU SUẤT BÁN HÀNG TUẦN")
-st.caption("Tự động phân loại 5 trạng thái đơn hàng | Doanh thu thực trừ hoàn/hủy | So sánh WoW")
+st.caption("Đồng bộ quy tắc Shopee & TikTok Shop | 5 trạng thái đơn hàng | Doanh thu trừ hoàn/hủy | So sánh WoW")
 
 with st.sidebar:
     st.header("📅 Dữ liệu TUẦN NÀY (Bắt buộc)")
@@ -218,14 +269,13 @@ if not df_curr_raw.empty:
 
     # --- PHẦN 2: BẢNG & BIỂU ĐỒ PHÂN BỔ 5 NHÓM TRẠNG THÁI ---
     st.divider()
-    st.subheader("2. Phân bổ 5 nhóm trạng thái đơn hàng")
+    st.subheader("2. Phân bổ 5 nhóm trạng thái đơn hàng (Shopee & TikTok)")
     
     status_order = ['Giao thành công', 'Đang vận chuyển', 'Đang chờ giao hàng', 'Đơn hủy', 'Trả hàng / Hoàn tiền']
     status_df = (
         m_curr['full_df'].groupby('status_group', as_index=False)
         .agg(So_Don=('order_id', 'nunique'), So_Luong_SP=('qty', 'sum'), Doanh_Thu=('revenue', 'sum'))
     )
-    # Đảm bảo luôn hiển thị đủ 5 dòng theo thứ tự chuẩn
     base_status = pd.DataFrame({'status_group': status_order})
     status_df = pd.merge(base_status, status_df, on='status_group', how='left').fillna(0)
     status_df['Ty_Trong_Don (%)'] = (status_df['So_Don'] / m_curr['tot_orders'] * 100).round(1) if m_curr['tot_orders'] > 0 else 0
@@ -452,7 +502,7 @@ if not df_curr_raw.empty:
     st.download_button(
         label="📥 Tải xuống Báo Cáo Tuần Đầy Đủ (.xlsx)",
         data=excel_bytes,
-        file_name="Bao_Cao_Tuan_TMDT_5_Trang_Thai.xlsx",
+        file_name="Bao_Cao_Tuan_TMDT_Dong_Bo.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
